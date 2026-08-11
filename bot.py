@@ -33,15 +33,19 @@ def salva_stato(stato):
 
 def invia_telegram(testo):
   if not TELEGRAM_TOKEN or not CHAT_ID:
-    print("Errore: Token o Chat ID mancanti!")
+    print(
+        "ERRORE CRITICO: Token o Chat ID di Telegram non trovati nelle variabili"
+        " d'ambiente!"
+    )
     return
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
   try:
-    requests.post(
+    response = requests.post(
         url, data={"chat_id": CHAT_ID, "text": testo, "parse_mode": "Markdown"}
     )
-  except:
-    pass
+    print(f"Risposta Telegram: {response.text}")
+  except Exception as e:
+    print(f"Errore invio telegram: {e}")
 
 
 def get_stats(stats, tipo):
@@ -184,7 +188,6 @@ try:
         segnali_inviati += 1
         print(f"✅ Segnale inviato: {casa} vs {ospite}")
 
-  # CORRETTO QUI: da segnali_inviaturar a segnali_inviati
   if segnali_inviati == 0 and isinstance(partite, list):
     pass
 
