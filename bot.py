@@ -193,7 +193,10 @@ try:
         print(f"✅ Segnale inviato: {casa} vs {ospite}")
 
   if segnali_inviati == 0 and isinstance(partite, list):
-    pass
+    invia_telegram(
+        "🔍 *Bot Calcio Live:* Scansione completata. Nessun match rispetta i"
+        " filtri in questo momento."
+    )
 
   salva_stato(nuovo_stato)
 
