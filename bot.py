@@ -184,9 +184,8 @@ try:
         segnali_inviati += 1
         print(f"✅ Segnale inviato: {casa} vs {ospite}")
 
-  if segnali_inviaturar == 0 and isinstance(partite, list):
-    # Opzionale: togli il commento sotto se vuoi che ti mandi la notifica anche quando non trova nulla
-    # invia_telegram("🔍 *Bot Calcio Live:* Scansione completata. Nessun match rispetta i filtri.")
+  # CORRETTO QUI: da segnali_inviaturar a segnali_inviati
+  if segnali_inviati == 0 and isinstance(partite, list):
     pass
 
   salva_stato(nuovo_stato)
