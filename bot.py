@@ -34,8 +34,8 @@ def salva_stato(stato):
 def invia_telegram(testo):
   if not TELEGRAM_TOKEN or not CHAT_ID:
     print(
-        "ERRORE CRITICO: Token o Chat ID di Telegram non trovati nelle variabili"
-        " d'ambiente!"
+        "ERRORE CRITICO: Token o Chat ID di Telegram non trovati nelle"
+        " variabili d'ambiente!"
     )
     return
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -94,6 +94,10 @@ try:
   resp = requests.get(
       url, headers=headers, params={"action": "get_events", "match_live": "1"}
   )
+
+  print(f"DEBUG - Status Code API: {resp.status_code}")
+  print(f"DEBUG - Risposta grezza API: {resp.text[:200]}")
+
   partite = resp.json()
 
   if isinstance(partite, list):
