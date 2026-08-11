@@ -1,11 +1,30 @@
 import requests
 import re
+import json
+import os
 
 # CONFIGURAZIONE
 API_KEY = "25a50b1640mshe6f07a04788a9e5p146782jsne750194545aa"
 API_HOST = "apifootball3.p.rapidapi.com"
 TELEGRAM_TOKEN = "8943323226:AAH14jJMbxoN5nYbwK8mzUkSZ0jXmP31z-4"
 CHAT_ID = "7417588888"
+
+# File per memorizzare lo stato precedente
+STATE_FILE = "stato_precedente.json"
+
+def carica_stato():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except: return {}
+    return {}
+
+def salva_stato(stato):
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(stato, f)
+    except: pass
 
 def invia_telegram(testo):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -35,7 +54,10 @@ def analizza_storico_h2h(team_id_1, team_id_2, headers, url_base):
         return f"📈 Media gol ultimi 3 scontri: {media:.1f}"
     except: return ""
 
-print("🔍 Eseguo scansione singola delle partite live...")
+print("🔍 Eseguo scansione con controllo del ritmo...")
+stato_precedente = carica_stato()
+nuovo_stato = {}
+segnali_inviati = 0
 
 try:
     url = "https://apifootball3.p.rapidapi.com/"
@@ -46,11 +68,13 @@ try:
     if isinstance(partite, list):
         print(f"Trovate {len(partite)} partite live.")
         for m in partite:
+            match_id = str(m.get('match_id'))
             stats = m.get('statistics', [])
+            
             tiri_tot = get_stats(stats, 'On Target') + get_stats(stats, 'Off Target')
             tiri_porta = get_stats(stats, 'On Target')
             attacchi = get_stats(stats, 'Dangerous Attacks')
-            angoli = get_stats(stats, 'Corners')
+            corner_tot = get_stats(stats, 'Corners')
             
             status = str(m.get('match_status', '0'))
             min_match = re.findall(r'\d+', status)
@@ -62,12 +86,29 @@ try:
             
             casa, ospite = m.get('match_hometeam_name'), m.get('match_awayteam_name')
             
+            nuovo_stato[match_id] = {
+                "tiri": tiri_tot,
+                "attacchi": attacchi,
+                "corner": corner_tot
+            }
+            
+            vecchio = stato_precedente.get(match_id, {"tiri": tiri_tot, "attacchi": attacchi, "corner": corner_tot})
+            delta_tiri = tiri_tot - vecchio["tiri"]
+            delta_attacchi = attacchi - vecchio["attacchi"]
+            delta_corner = corner_tot - vecchio["corner"]
+            
             segnale = None
             consiglio = None
             motivo_allerta = ""
             
-            # FILTRI GLOBALI
-            if 23 <= minuto <= 41 and gol == 0 and tiri_tot >= 4 and attacchi >= 10:
+            # --- LOGICA FILTRI ---
+            # 1. TOP FILTRO (15°-25° min, 0-0, tiri>=3, attacchi>=15, corner>=3)
+            if 15 <= minuto <= 25 and gol == 0 and tiri_tot >= 3 and attacchi >= 15 and corner_tot >= 3:
+                segnale, consiglio = "⭐ TOP FILTRO: OVER 0.5 HT", "👉 PUNTA: OVER 0.5 HT (Quota 1.50-1.65)"
+                motivo_allerta = f"📊 Totali: Tiri {tiri_tot} | Attacchi {attacchi} | Corner {corner_tot}"
+            
+            # 2. FILTRI ORIGINARI
+            elif 23 <= minuto <= 41 and gol == 0 and tiri_tot >= 4 and attacchi >= 10:
                 segnale, consiglio = "🎯 OVER 0.5 1°T", "👉 PUNTA: OVER 0.5 HT"
                 motivo_allerta = f"📊 Totali: Tiri {tiri_tot} | Attacchi {attacchi}"
             elif minuto >= 60 and gol <= 2 and tiri_tot >= 10 and attacchi >= 18:
@@ -84,11 +125,19 @@ try:
                     f"⚽ {casa} vs {ospite}\n"
                     f"⏱️ Min: {minuto} | 🥅 Ris: {gol_c}-{gol_o}\n\n"
                     f"{consiglio}\n"
-                    f"ℹ️ _{motivo_allerta}_\n\n"
+                    f"ℹ️ _{motivo_allerta}_\n"
+                    f"🔥 _Crescita ultimi 10min: +{delta_tiri} tiri, +{delta_attacchi} attacchi, +{delta_corner} corner_\n\n"
                     f"{h2h}"
                 )
                 invia_telegram(messaggio)
+                segnali_inviati += 1
                 print(f"✅ Segnale inviato: {casa} vs {ospite}")
+
+    if segnali_inviati == 0:
+        invia_telegram("🔍 *Bot Calcio Live:* Scansione completata. Nessun match rispetta i filtri in questo momento.")
+
+    salva_stato(nuovo_stato)
 
 except Exception as e:
     print(f"⚠️ Errore: {e}")
+    invia_telegram(f"⚠️ Errore nel bot: {e}")
