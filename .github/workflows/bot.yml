@@ -3,7 +3,7 @@ name: Esegui Bot Calcio
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/7 * * * *'
+    - cron: '*/5 * * * *'
 
 jobs:
   build:
