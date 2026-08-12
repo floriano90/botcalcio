@@ -2,6 +2,7 @@ import json
 import os
 import re
 import requests
+import time
 
 # CONFIGURAZIONE
 API_KEY = "25a50b1640mshe6f07a04788a9e5p146782jsne750194545aa"
@@ -9,14 +10,14 @@ API_HOST = "apifootball3.p.rapidapi.com"
 TELEGRAM_TOKEN = "8943323226:AAGZo6K4Vnw-P2fF8QIP2q-5B_oPRHk-6cg"
 CHAT_ID = "7417588888"
 
-# File per memorizzare lo stato precedente
+# Percorso di salvataggio sul Cloud di Google Colab
 STATE_FILE = "stato_precedente.json"
 
 
 def carica_stato():
   if os.path.exists(STATE_FILE):
     try:
-      with open(STATE_FILE, "r") as f:
+      with open(STATE_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
     except:
       return {}
@@ -25,8 +26,8 @@ def carica_stato():
 
 def salva_stato(stato):
   try:
-    with open(STATE_FILE, "w") as f:
-      json.dump(stato, f)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+      json.dump(stato, f, indent=4)
   except:
     pass
 
@@ -54,23 +55,13 @@ def get_stats(stats, tipo):
 
 
 def estrai_minuto(status_str):
-  if not status_str:
-    return 0
   numeri = re.findall(r"\d+", str(status_str))
-  if numeri:
-    min_val = int(numeri[0])
-    for n in numeri:
-      val = int(n)
-      if 0 <= val <= 120:
-        return val
-    return min_val if min_val <= 120 else 0
-  return 0
+  return int(numeri[0]) if numeri else 0
 
 
-def analizza_storico_h2h(team_id_1, team_id_2, headers, url_base):
+def analizza_h2h_completo(team_id_1, team_id_2, headers, url_base):
   if not team_id_1 or not team_id_2:
-    return "📈 H2H: ID squadre non disponibili."
-
+    return 2.5, "📈 H2H: Dati non disponibili."
   querystring = {
       "action": "get_H2H",
       "firstTeamId": team_id_1,
@@ -79,180 +70,260 @@ def analizza_storico_h2h(team_id_1, team_id_2, headers, url_base):
   try:
     response = requests.get(url_base, headers=headers, params=querystring)
     dati = response.json()
-    partite = dati if isinstance(dati, list) else []
+    partite = (
+        dati.get("result", dati.get("data", []))
+        if isinstance(dati, dict)
+        else dati
+    )
     if not partite:
-      return "📈 H2H: Nessun precedente trovato."
+      return 2.5, "📈 H2H: Nessun precedente."
+    ultime = partite[:4]
     tot_gol = sum(
         int(p.get("match_hometeam_score", 0) or 0)
         + int(p.get("match_awayteam_score", 0) or 0)
-        for p in partite[:3]
+        for p in ultime
     )
-    media = tot_gol / len(partite[:3])
-    return f"📈 Media gol ultimi 3 scontri: {media:.1f}"
-  except Exception as e:
-    return f"📈 H2H: Errore nel recupero dati."
+    media = tot_gol / len(ultime)
+    return media, f"📈 Media gol ultimi precedenti: {media:.1f}"
+  except:
+    return 2.5, "📈 H2H: Errore."
 
 
-print("🔍 Eseguo scansione con controllo del ritmo...")
-stato_precedente = carica_stato()
-nuovo_stato = {}
-segnali_inviati = 0
-
-try:
-  url = "https://apifootball3.p.rapidapi.com/"
-  headers = {"x-rapidapi-key": API_KEY, "x-rapidapi-host": API_HOST}
-  resp = requests.get(
-      url, headers=headers, params={"action": "get_events", "match_live": "1"}
-  )
-  partite = resp.json()
-
-  if isinstance(partite, list):
-    print(f"Trovate {len(partite)} partite live.")
-    for m in partite:
-      match_id = str(m.get("match_id"))
-      stats = m.get("statistics", [])
-
-      h_tiri_porta, a_tiri_porta = get_stats(stats, "On Target")
-      h_tiri_off, a_tiri_off = get_stats(stats, "Off Target")
-      h_attacchi, a_attacchi = get_stats(stats, "Dangerous Attacks")
-      h_corner, a_corner = get_stats(stats, "Corners")
-
-      tiri_tot_h = h_tiri_porta + h_tiri_off
-      tiri_tot_a = a_tiri_porta + a_tiri_off
-
-      tiri_tot = tiri_tot_h + tiri_tot_a
-      tiri_porta = h_tiri_porta + a_tiri_porta
-      attacchi = h_attacchi + a_attacchi
-      corner_tot = h_corner + a_corner
-
-      status_raw = m.get("match_status", "0")
-      minuto = estrai_minuto(status_raw)
-
-      if minuto == 0:
-        continue
-
-      gol_c = int(m.get("match_hometeam_score", 0) or 0)
-      gol_o = int(m.get("match_awayteam_score", 0) or 0)
-      gol = gol_c + gol_o
-
-      casa, ospite = m.get("match_hometeam_name"), m.get(
-          "match_awayteam_name"
-      )
-
-      # Estrazione sicura degli ID squadra con fallback
-      id_casa = m.get("match_hometeam_id") or m.get("home_team_id")
-      id_ospite = m.get("match_awayteam_id") or m.get("away_team_id")
-
-      nuovo_stato[match_id] = {
-          "tiri": tiri_tot,
-          "attacchi": attacchi,
-          "corner": corner_tot,
-      }
-
-      vecchio = stato_precedente.get(
-          match_id, {"tiri": tiri_tot, "attacchi": attacchi, "corner": corner_tot}
-      )
-      delta_tiri = tiri_tot - vecchio["tiri"]
-      delta_attacchi = attacchi - vecchio["attacchi"]
-      delta_corner = corner_tot - vecchio["corner"]
-
-      apm_totale = attacchi / minuto if minuto > 0 else 0
-      apm_10min = delta_attacchi / 10 if minuto > 0 else 0
-
-      diff_attacchi = abs(h_attacchi - a_attacchi)
-      diff_tiri_porta = abs(h_tiri_porta - a_tiri_porta)
-
-      segnale = None
-      consiglio = None
-      motivo_allerta = ""
-
-      # --- LOGICA FILTRI ---
-
-      # 1. TEST ATTACCHI: minuto <= 35, diff attacchi >= 15, diff tiri porta >= 4
-      if minuto <= 35 and diff_attacchi >= 15 and diff_tiri_porta >= 4:
-        segnale, consiglio = (
-            "🚀 TEST ATTACCHI",
-            "👉 PUNTA: OVER 0.5 HT",
-        )
-        motivo_allerta = (
-            f"📊 Diff. Attacchi Pericolosi: {diff_attacchi} | Diff. Tiri in"
-            f" porta: {diff_tiri_porta}"
-        )
-
-      # 2. ASSALTO MOSTRUOSO: 50°-75° min, tiri in porta >= 6, tiri totali >= 15
-      elif 50 <= minuto <= 75 and tiri_porta >= 6 and tiri_tot >= 15:
-        segnale, consiglio = (
-            "⚡ ASSALTO MOSTRUOSO",
-            "👉 PUNTA: OVER GOL / SEGNA GOAL",
-        )
-        motivo_allerta = (
-            f"📊 Totali: Tiri {tiri_tot} | In porta {tiri_porta} | Attacchi"
-            f" {attacchi}"
-        )
-
-      # 3. TEST OVER 0.5 NUOVO: minuto fino al 30, tiri in porta >= 3, APM > 1, corner >= 2
-      elif minuto <= 30 and tiri_porta >= 3 and apm_totale > 1 and corner_tot >= 2:
-        segnale, consiglio = (
-            "🔥 TEST OVER 0.5 NUOVO",
-            "👉 PUNTA: OVER 0.5 HT",
-        )
-        motivo_allerta = (
-            f"📊 Tiri in porta: {tiri_porta} | Corner: {corner_tot} | APM:"
-            f" {apm_totale:.2f}"
-        )
-
-      # 4. OVER 0.5 FINO AL MINUTO 30
-      elif (
-          minuto <= 30
-          and gol == 0
-          and tiri_porta >= 2
-          and corner_tot >= 3
-          and apm_totale >= 1
-      ):
-        segnale, consiglio = (
-            "🎯 OVER 0.5 (1° TEMPO)",
-            "👉 PUNTA: OVER 0.5 HT",
-        )
-        motivo_allerta = (
-            f"📊 Tiri in porta: {tiri_porta} | Corner: {corner_tot} | APM:"
-            f" {apm_totale:.2f}"
-        )
-
-      # 5. GOL IMMINENTE: 50°-75° min, APM ultimi 10 min >= 1.1
-      elif 50 <= minuto <= 75 and apm_10min >= 1.1:
-        segnale, consiglio = (
-            "⚽ GOL IMMINENTE",
-            "👉 PUNTA: OVER 0.5 LIVE (2°T)",
-        )
-        motivo_allerta = (
-            f"🔥 Crescita ultimi 10 min: +{delta_attacchi} attacchi"
-            f" pericolosi (APM 10min: {apm_10min:.2f})"
-        )
-
-      if segnale:
-        h2h = analizza_storico_h2h(id_casa, id_ospite, headers, url)
-        messaggio = (
-            f"🔔 *SEGNALE: {segnale}*\n"
-            f"⚽ {casa} vs {ospite}\n"
-            f"⏱️ Min: {minuto} | 🥅 Ris: {gol_c}-{gol_o}\n\n"
-            f"{consiglio}\n"
-            f"ℹ️ _{motivo_allerta}_\n"
-            f"📈 _Variazione: +{delta_tiri} tiri, +{delta_attacchi} attacchi,"
-            f" +{delta_corner} corner_\n\n"
-            f"{h2h}"
-        )
-        invia_telegram(messaggio)
-        segnali_inviati += 1
-        print(f"✅ Segnale inviato: {casa} vs {ospite}")
-
-  if segnali_inviati == 0:
-    invia_telegram(
-        "🔍 *Bot Calcio Live:* Scansione completata. Nessun match rispetta i"
-        " filtri in questo momento."
+def get_quota_over(match_id, headers, url_base):
+  querystring = {"action": "get_odds", "match_id": match_id}
+  try:
+    response = requests.get(url_base, headers=headers, params=querystring)
+    dati = response.json()
+    odds = (
+        dati.get("result", dati.get("data", [dati]))
+        if isinstance(dati, dict)
+        else dati
     )
+    for item in odds:
+      for book in item.get("bookmakers", []):
+        for bet in book.get("bets", []):
+          if "over/under" in str(bet.get("bet_name", "")).lower():
+            for val in bet.get("values", []):
+              if "2.5" in str(val.get("value", "")).lower() and "over" in str(
+                  val.get("value", "")
+              ).lower():
+                return float(val.get("odd", 1.85)), str(val.get("odd", 1.85))
+    return 1.85, "N/A"
+  except:
+    return 1.85, "N/A"
 
-  salva_stato(nuovo_stato)
 
-except Exception as e:
-  print(f"⚠️ Errore: {e}")
-  invia_telegram(f"⚠️ Errore nel bot: {e}")
+print(
+    "🤖 Bot Calcio Live - Versione Cloud (Google Colab) Pronta e in esecuzione."
+)
+
+if __name__ == "__main__":
+  while True:
+    stato_precedente = carica_stato()
+    nuovo_stato = {}
+    match_per_multipla_filtri = []
+    selezioni_master_ai = []
+
+    try:
+      resp = requests.get(
+          "https://apifootball3.p.rapidapi.com/",
+          headers={
+              "x-rapidapi-key": API_KEY,
+              "x-rapidapi-host": API_HOST,
+          },
+          params={"action": "get_events", "match_live": "1"},
+      )
+      partite = resp.json()
+
+      if isinstance(partite, list):
+        for m in partite:
+          match_id = str(m.get("match_id"))
+          stats = m.get("statistics", [])
+          h_tiri_porta, a_tiri_porta = get_stats(stats, "On Target")
+          h_tiri_off, a_tiri_off = get_stats(stats, "Off Target")
+          h_attacchi, a_attacchi = get_stats(stats, "Dangerous Attacks")
+          h_corner, a_corner = get_stats(stats, "Corners")
+
+          minuto = estrai_minuto(m.get("match_status", "0"))
+          if minuto == 0:
+            continue
+
+          tiri_porta = h_tiri_porta + a_tiri_porta
+          tiri_tot = (h_tiri_porta + h_tiri_off) + (a_tiri_porta + a_tiri_off)
+          attacchi = h_attacchi + a_attacchi
+          corner_tot = h_corner + a_corner
+          gol_c = int(m.get("match_hometeam_score", 0) or 0)
+          gol_o = int(m.get("match_awayteam_score", 0) or 0)
+          gol_totali = gol_c + gol_o
+
+          casa = m.get("match_hometeam_name")
+          ospite = m.get("match_awayteam_name")
+          id_casa = m.get("match_hometeam_id") or m.get("home_team_id")
+          id_ospite = m.get("match_awayteam_id") or m.get("away_team_id")
+
+          vecchio = stato_precedente.get(
+              match_id,
+              {
+                  "attacchi": attacchi,
+                  "tiri_porta": tiri_porta,
+                  "corner": corner_tot,
+              },
+          )
+          delta_attacchi = attacchi - vecchio["attacchi"]
+          delta_tiri_porta = tiri_porta - vecchio.get("tiri_porta", tiri_porta)
+          delta_corner = corner_tot - vecchio["corner"]
+          apm_totale = attacchi / minuto if minuto > 0 else 0
+
+          media_h2h, testo_h2h = analizza_h2h_completo(
+              id_casa,
+              id_ospite,
+              {"x-rapidapi-key": API_KEY, "x-rapidapi-host": API_HOST},
+              "https://apifootball3.p.rapidapi.com/",
+          )
+          quota_o25, testo_quota = get_quota_over(
+              match_id,
+              {"x-rapidapi-key": API_KEY, "x-rapidapi-host": API_HOST},
+              "https://apifootball3.p.rapidapi.com/",
+          )
+
+          score_ia = 0
+          if media_h2h >= 2.6:
+            score_ia += 20
+          if quota_o25 <= 1.90:
+            score_ia += 20
+          if apm_totale >= 1.2 or delta_attacchi >= 5:
+            score_ia += 35
+          if tiri_porta >= 4:
+            score_ia += 25
+
+          conferma_ia = "✅ POSITIVA" if score_ia >= 70 else "❌ NEUTRA"
+
+          segnale_filtro = None
+          consiglio_filtro = None
+          motivo_filtro = ""
+
+          if (
+              15 <= minuto <= 38
+              and gol_totali <= 1
+              and tiri_porta >= 3
+              and apm_totale >= 1.0
+          ):
+            segnale_filtro, consiglio_filtro = (
+                "🎯 HT ALPHA-FIRST (HT)",
+                "OVER 0.5 HT",
+            )
+            motivo_filtro = f"Tiri porta: {tiri_porta} | APM: {apm_totale:.2f}"
+          elif (
+              45 <= minuto <= 75
+              and gol_totali < 3
+              and (delta_attacchi >= 6 or tiri_porta >= 7)
+          ):
+            segnale_filtro, consiglio_filtro = (
+                "🔥 OVER 2.5 DYNAMIC",
+                "OVER 2.5 / 1.5 LIVE",
+            )
+            motivo_filtro = (
+                f"Parziale: {gol_c}-{gol_o} | Delta attacchi: +{delta_attacchi}"
+            )
+          elif (
+              52 <= minuto <= 78
+              and delta_attacchi >= 7
+              and delta_tiri_porta >= 2
+          ):
+            segnale_filtro, consiglio_filtro = "💥 ALPHA-SURGE", "OVER 0.5 LIVE"
+            motivo_filtro = (
+                f"Accelerazione: +{delta_attacchi} attacchi, +"
+                f"{delta_tiri_porta} tiri porta"
+            )
+          elif (
+              50 <= minuto <= 78
+              and tiri_porta >= 6
+              and tiri_tot >= 14
+              and gol_totali < 3
+          ):
+            segnale_filtro, consiglio_filtro = (
+                "⚡ ASSALTO MOSTRUOSO",
+                "OVER 0.5 / 1.5 LIVE",
+            )
+            motivo_filtro = (
+                f"Tiri totali: {tiri_tot} | In porta: {tiri_porta} (Pressione"
+                " estrema)"
+            )
+
+          if segnale_filtro:
+            msg_filtro = (
+                f"🔔 *SEGNALE STRATEGICO: {segnale_filtro}*\n"
+                f"⚽ {casa} vs {ospite}\n"
+                f"⏱️ Min: {minuto} | 🥅 Ris: {gol_c}-{gol_o}\n\n"
+                f"👉 PUNTA: *{consiglio_filtro}*\n"
+                f"📊 CONFERMA IA: {conferma_ia} (Score: {score_ia}/100)\n"
+                f"ℹ️ _{motivo_filtro}_\n"
+                f"📈 Quota Over 2.5: {testo_quota} | {testo_h2h}"
+            )
+            invia_telegram(msg_filtro)
+            match_per_multipla_filtri.append({
+                "match": f"{casa} vs {ospite}",
+                "minuto": minuto,
+                "risultato": f"{gol_c}-{gol_o}",
+                "consiglio": consiglio_filtro,
+                "segnale": segnale_filtro,
+            })
+
+          if 15 <= minuto <= 82 and gol_totali < 3:
+            if score_ia >= 70:
+              mercato_ai = "OVER 1.5 LIVE" if gol_totali == 0 else "OVER 2.5 LIVE"
+              selezioni_master_ai.append({
+                  "match": f"{casa} vs {ospite}",
+                  "minuto": minuto,
+                  "risultato": f"{gol_c}-{gol_o}",
+                  "score": score_ia,
+                  "mercato": mercato_ai,
+                  "logica": "Modello quantitativo globale superato",
+              })
+              invia_telegram(
+                  f"🤖 *AI TRADER ALERT (Score: {score_ia}/100)*\n"
+                  f"⚽ {casa} vs {ospite} (Min {minuto} | {gol_c}-{gol_o})\n"
+                  f"👉 SCELTA: *{mercato_ai}*\n"
+                  f"📈 Condizioni ideali rilevate dai flussi di mercato e H2H."
+              )
+
+          nuovo_stato[match_id] = {
+              "attacchi": attacchi,
+              "tiri_porta": tiri_porta,
+              "corner": corner_tot,
+          }
+
+      if len(match_per_multipla_filtri) >= 2:
+        testo_m1 = (
+            f"🎯 *MULTI-SYSTEM ALPHA (MULTIPLA DEI TUOI FILTRI)* 🚀\n"
+            f"⚡ Rilevate {len(match_per_multipla_filtri)} partite con i tuoi"
+            " criteri di assalto!\n\n"
+        )
+        for idx, item in enumerate(match_per_multipla_filtri, 1):
+          testo_m1 += (
+              f"{idx}. *{item['match']}* (Min {item['minuto']} |"
+              f" {item['risultato']}) ➔ {item['consiglio']}\n"
+          )
+        invia_telegram(testo_m1)
+
+      if len(selezioni_master_ai) >= 2:
+        selezioni_master_ai.sort(key=lambda x: x["score"], reverse=True)
+        testo_m2 = (
+            f"👑 *AI QUANT ACCUMULATOR (LA MULTIPLA MASTER DELL'IA)* 🚀\n\n"
+        )
+        for idx, item in enumerate(selezioni_master_ai[:3], 1):
+          testo_m2 += (
+              f"{idx}. *{item['match']}* (Min {item['minuto']} |"
+              f" {item['risultato']})\n   ➔ Puntata: *{item['mercato']}*"
+              f" (Confidence: {item['score']}%)\n\n"
+          )
+        testo_m2 += "🎯 _Stake ridotto consigliato (es. 2€)._"
+        invia_telegram(testo_m2)
+
+      salva_stato(nuovo_stato)
+
+    except Exception as e:
+      print(f"Errore nel ciclo: {e}")
+
+    print("⏳ [Cloud] Attendo 5 minuti per la prossima scansione...")
+    time.sleep(300)
