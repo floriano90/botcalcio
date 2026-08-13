@@ -2,22 +2,21 @@ name: Esegui Bot Calcio
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Gira ogni 5 minuti
-  workflow_dispatch: # Ti permette di avviarlo manualmente quando vuoi
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout del codice
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configura Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-iscritti:
       - name: Installa dipendenze
         run: pip install requests
 
